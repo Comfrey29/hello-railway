@@ -1,28 +1,36 @@
 import os
 import subprocess
 import threading
-import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog
-import shutil
+import time
+import jwt
 from flask import Flask, request, jsonify, abort
 import logging
 from threading import Thread
+import tkinter as tk
+from tkinter import filedialog, messagebox, simpledialog
+import shutil
 
-# Configuració segura: token de Discord i clau API per protegir l'API
-DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")  # No exposem mai aquest valor
-API_KEY = os.environ.get("API_KEY")              # Clau privada per accedir a la API
+# Configuració segura
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
+API_KEY = os.environ.get("API_KEY")  # Clau API privada
+JWT_SECRET = os.environ.get("JWT_SECRET")  # Secret per JWT
 
 BOTS_DIR = "bots"
 BOTS_PROCESSES = {}
 
 os.makedirs(BOTS_DIR, exist_ok=True)
 
-# ------------------------- Funcions per a la gestió local i remota -------------------------
+# ------------ Funcions de gestió local i remota amb log i temps ------------
+
+def log_accio(missatge):
+    info = f"{time.strftime('%Y-%m-%d %H:%M:%S')} - IP: {request.remote_addr} - {missatge}"
+    print(info)
 
 def listar_bots():
     try:
         return os.listdir(BOTS_DIR)
-    except Exception:
+    except Exception as err:
+        log_accio(f"Error al llistar bots: {err}")
         return []
 
 def pujar_bot(listbox):
@@ -53,7 +61,6 @@ def iniciar_bot(bot_id):
     script_path = os.path.join(bot_path, scripts[0])
 
     def runner():
-        # Aquí podries usar DISCORD_TOKEN per iniciar el bot si cal dins l'script
         proc = subprocess.Popen(['python', script_path])
         BOTS_PROCESSES[bot_id] = proc
         proc.wait()
@@ -145,53 +152,66 @@ def gui():
 
     root.mainloop()
 
-# ------------------------ Flask API seguretat amb API KEY ------------------------
+# ------------------------ Flask API doble autenticació i temps d'execució ------------------------
 
 app = Flask(__name__)
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
-
-def require_apikey(view_func):
+def require_apikey_jwt(view_func):
     def wrapper(*args, **kwargs):
-        key = request.headers.get("x-api-key")
-        if key != API_KEY:
-            abort(401, description="API key incorrecte")
+        api_key = request.headers.get("x-api-key")
+        jwt_token = request.headers.get("Authorization")
+        if api_key != API_KEY:
+            abort(401, description="API key incorrecta")
+        try:
+            jwt.decode(jwt_token, JWT_SECRET, algorithms=["HS256"])
+        except Exception:
+            abort(401, description="Token JWT invàlid")
         return view_func(*args, **kwargs)
     wrapper.__name__ = view_func.__name__
     return wrapper
 
-@app.route('/')
+@app.route("/")
 def welcome():
-    return "Servei de bots actiu"
+    return "Servei de bots actiu i protegit"
 
-@app.route('/bots', methods=['GET'])
-@require_apikey
+@app.route("/bots", methods=["GET"])
+@require_apikey_jwt
 def api_listar_bots():
+    start = time.time()
     bots = listar_bots()
-    return jsonify(bots=bots)
+    ms = int((time.time()-start)*1000)
+    log_accio(f"Llistat bots - {ms}ms")
+    return jsonify(bots=bots, exec_time_ms=ms)
 
-@app.route('/bots/start', methods=['POST'])
-@require_apikey
+@app.route("/bots/start", methods=["POST"])
+@require_apikey_jwt
 def api_iniciar_bot():
+    start = time.time()
     data = request.get_json()
     bot_id = data.get('bot_id')
     if not bot_id:
         return jsonify(error="No s'ha especificat bot_id"), 400
     success, msg = iniciar_bot(bot_id)
-    return jsonify(message=msg), 200 if success else 400
+    ms = int((time.time()-start)*1000)
+    log_accio(f"Inici bot '{bot_id}' - {ms}ms")
+    return jsonify(message=msg, exec_time_ms=ms), 200 if success else 400
 
-@app.route('/bots/stop', methods=['POST'])
-@require_apikey
+@app.route("/bots/stop", methods=["POST"])
+@require_apikey_jwt
 def api_aturar_bot():
+    start = time.time()
     data = request.get_json()
     bot_id = data.get('bot_id')
     if not bot_id:
         return jsonify(error="No s'ha especificat bot_id"), 400
     success, msg = aturar_bot(bot_id)
-    return jsonify(message=msg), 200 if success else 400
+    ms = int((time.time()-start)*1000)
+    log_accio(f"Atura bot '{bot_id}' - {ms}ms")
+    return jsonify(message=msg, exec_time_ms=ms), 200 if success else 400
 
 def run_flask():
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
 
 # ------------------------ Executar API i GUI ------------------------
