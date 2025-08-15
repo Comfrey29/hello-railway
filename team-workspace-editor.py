@@ -1,221 +1,186 @@
+#!/usr/bin/env python3
 import os
 import subprocess
 import threading
-import time
-import jwt
-from flask import Flask, request, jsonify, abort
-import logging
-from threading import Thread
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 import shutil
+import requests
 
-# Configuració segura
-DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
-API_KEY = os.environ.get("API_KEY")  # Clau API privada
-JWT_SECRET = os.environ.get("JWT_SECRET")  # Secret per JWT
-
+# Ruta local per emmagatzemar bots
 BOTS_DIR = "bots"
+# Diccionari per controlar processos dels bots en execució
 BOTS_PROCESSES = {}
+# URL base de la API desplegada a Render (modifica-la amb la teva adreça real)
+RENDER_API_URL = "https://arcom-host.example.com"  # <-- posa aquí la teva URL
 
-os.makedirs(BOTS_DIR, exist_ok=True)
+# Funció per validar token fent crida a l'API Render
+def validar_token_api(token):
+    try:
+        resp = requests.post(f"{RENDER_API_URL}/validate_token", json={"token": token})
+        if resp.status_code == 200 and resp.json().get("valid"):
+            return True
+        else:
+            return False
+    except Exception as e:
+        print("Error validant token via API:", e)
+        return False
 
-# ------------ Funcions de gestió local i remota amb log i temps ------------
-
-def log_accio(missatge):
-    info = f"{time.strftime('%Y-%m-%d %H:%M:%S')} - IP: {request.remote_addr} - {missatge}"
-    print(info)
+# Funció per demanar al usuari token i validar-lo amb la API
+def pedir_token_api(bot_id):
+    while True:
+        token = simpledialog.askstring("Token Discord", f"Introduce el token para el bot '{bot_id}':", show="*")
+        if not token:
+            messagebox.showwarning("Cancelado", "No se informó ningún token. Operación cancelada.")
+            return False
+        if validar_token_api(token):
+            token_path = os.path.join(BOTS_DIR, bot_id, "token.txt")
+            with open(token_path, "w") as f:
+                f.write(token.strip())
+            messagebox.showinfo("Éxito", "Token validado y guardado correctamente.")
+            return True
+        else:
+            messagebox.showerror("Error", "Token inválido. Inténtelo de nuevo.")
 
 def listar_bots():
     try:
         return os.listdir(BOTS_DIR)
-    except Exception as err:
-        log_accio(f"Error al llistar bots: {err}")
+    except Exception:
         return []
 
-def pujar_bot(listbox):
-    bot_id = simpledialog.askstring("Nom del bot", "Introdueix un identificador pel bot:")
+def subir_bot(listbox):
+    bot_id = simpledialog.askstring("Nuevo Bot", "Introduce un identificador único para el bot:")
     if not bot_id:
         return
-    file_path = filedialog.askopenfilename(title="Tria fitxer .py del bot", filetypes=[("Arxius Python", "*.py")])
+    file_path = filedialog.askopenfilename(title="Selecciona el archivo .py del bot", filetypes=[("Archivos Python","*.py")])
     if not file_path:
         return
-    bot_path = os.path.join(BOTS_DIR, bot_id)
-    os.makedirs(bot_path, exist_ok=True)
-    dst_path = os.path.join(bot_path, os.path.basename(file_path))
+    bot_folder = os.path.join(BOTS_DIR, bot_id)
+    os.makedirs(bot_folder, exist_ok=True)
+    dest_path = os.path.join(bot_folder, os.path.basename(file_path))
     try:
-        shutil.copyfile(file_path, dst_path)
+        shutil.copyfile(file_path, dest_path)
         if bot_id not in listbox.get(0, tk.END):
             listbox.insert(tk.END, bot_id)
-        messagebox.showinfo("Correcte", f"Bot '{bot_id}' pujat/actualitzat correctament")
+        if pedir_token_api(bot_id):
+            messagebox.showinfo("Información", f"Bot '{bot_id}' subido correctamente y token guardado.")
+        else:
+            messagebox.showwarning("Aviso", f"Bot '{bot_id}' subido, pero token no guardado o inválido.")
     except Exception as e:
-        messagebox.showerror("Error", f"No s'ha pogut pujar el bot: {e}")
+        messagebox.showerror("Error", f"No se pudo subir el bot: {e}")
 
-def iniciar_bot(bot_id):
+def iniciar_bot(bot_id, script_file):
     if bot_id in BOTS_PROCESSES:
-        return False, "Bot ja executant-se"
-    bot_path = os.path.join(BOTS_DIR, bot_id)
-    scripts = [f for f in os.listdir(bot_path) if f.endswith(".py")]
-    if not scripts:
-        return False, "Cap script .py trobat"
-    script_path = os.path.join(bot_path, scripts[0])
+        messagebox.showinfo("Aviso", "El bot ya está en ejecución.")
+        return False, "Bot activo"
+    bot_folder = os.path.join(BOTS_DIR, bot_id)
+    token_path = os.path.join(bot_folder, "token.txt")
+    if not os.path.isfile(token_path):
+        messagebox.showerror("Error", "No existe token para este bot. Debe introducirlo.")
+        return False, "Sin token"
+    script_path = os.path.join(bot_folder, script_file)
+    if not os.path.isfile(script_path):
+        return False, "Script no encontrado"
 
-    def runner():
-        proc = subprocess.Popen(['python', script_path])
+    def run():
+        proc = subprocess.Popen(['python3', script_path])
         BOTS_PROCESSES[bot_id] = proc
         proc.wait()
-        BOTS_PROCESSES.pop(bot_id, None)
+        if bot_id in BOTS_PROCESSES:
+            del BOTS_PROCESSES[bot_id]
 
-    thread = threading.Thread(target=runner, daemon=True)
+    thread = threading.Thread(target=run, daemon=True)
     thread.start()
-    return True, "Bot iniciat correctament"
+    return True, "Bot iniciado"
 
-def aturar_bot(bot_id):
+def detener_bot(bot_id):
     proc = BOTS_PROCESSES.get(bot_id)
-    if not proc:
-        return False, "Bot no està actiu"
-    proc.terminate()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-    BOTS_PROCESSES.pop(bot_id, None)
-    return True, "Bot aturat correctament"
+    if proc:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except:
+            proc.kill()
+        del BOTS_PROCESSES[bot_id]
+        messagebox.showinfo("Info", f"Bot '{bot_id}' detenido")
+        return True, "Detenido"
+    else:
+        messagebox.showwarning("Aviso", "Bot no en ejecución")
+        return False, "No estaba activo"
 
 def eliminar_bot(listbox, bot_id):
-    if messagebox.askyesno("Eliminar?", f"Segur que vols eliminar el bot '{bot_id}'?"):
-        aturar_bot(bot_id)
+    if messagebox.askyesno("Confirmar", f"¿Eliminar bot '{bot_id}'?"):
+        detener_bot(bot_id)
         shutil.rmtree(os.path.join(BOTS_DIR, bot_id), ignore_errors=True)
         refrescar_bots(listbox)
-        messagebox.showinfo("Eliminat", f"Bot '{bot_id}' eliminat")
+        messagebox.showinfo("Info", "Bot eliminado")
 
-def veure_info(bot_id):
-    bot_path = os.path.join(BOTS_DIR, bot_id)
-    scripts = [f for f in os.listdir(bot_path) if f.endswith(".py")]
+def ver_info(bot_id):
+    bot_folder = os.path.join(BOTS_DIR, bot_id)
+    scripts = [f for f in os.listdir(bot_folder) if f.endswith(".py")]
     running = "Sí" if bot_id in BOTS_PROCESSES else "No"
-    messagebox.showinfo("Info bot",
-                        f"ID bot: {bot_id}\nScripts: {', '.join(scripts) if scripts else '(cap)'}\nExecutant: {running}")
+    messagebox.showinfo("Información del bot", f"ID: {bot_id}\nScripts: {', '.join(scripts)}\nEjecutando: {running}")
 
 def refrescar_bots(listbox):
     listbox.delete(0, tk.END)
     for bot in listar_bots():
         listbox.insert(tk.END, bot)
 
-def accio_bot(listbox, accio):
+def accion_bot(listbox, accion):
     if not listbox.curselection():
-        messagebox.showwarning("Error", "Selecciona un bot abans")
+        messagebox.showwarning("Aviso", "Seleccione un bot")
         return
     bot_id = listbox.get(listbox.curselection()[0])
-    if accio == "start":
-        success, msg = iniciar_bot(bot_id)
-        if success:
-            messagebox.showinfo("Iniciat", msg)
+    bot_folder = os.path.join(BOTS_DIR, bot_id)
+    scripts = [f for f in os.listdir(bot_folder) if f.endswith(".py")]
+    if not scripts:
+        messagebox.showerror("Error", "No hay script para este bot")
+        return
+    script = scripts[0]
+    if accion == "start":
+        exito, msg = iniciar_bot(bot_id, script)
+        if exito:
+            messagebox.showinfo("Info", msg)
         else:
             messagebox.showerror("Error", msg)
-    elif accio == "stop":
-        success, msg = aturar_bot(bot_id)
-        if success:
-            messagebox.showinfo("Aturat", msg)
-        else:
-            messagebox.showerror("Error", msg)
-    elif accio == "info":
-        veure_info(bot_id)
-    elif accio == "delete":
+    elif accion == "stop":
+        detener_bot(bot_id)
+    elif accion == "info":
+        ver_info(bot_id)
+    elif accion == "delete":
         eliminar_bot(listbox, bot_id)
-
-# ------------------------ Interfície local Tkinter ------------------------
 
 def gui():
     root = tk.Tk()
-    root.title("Free Hosting Bots Discord 24/7 (local)")
-    root.geometry("650x400")
+    root.title("Gestor Bots Discord")
+    root.geometry("700x400")
 
-    frame_left = tk.Frame(root)
-    frame_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=15, pady=15)
+    left_frame = tk.Frame(root)
+    left_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
 
-    tk.Label(frame_left, text="Bots pujats:", font=("Arial", 12, "bold")).pack(anchor="w")
-    listbox_bots = tk.Listbox(frame_left, width=30, height=15)
-    listbox_bots.pack(fill=tk.BOTH, expand=True)
-    refrescar_bots(listbox_bots)
+    tk.Label(left_frame, text="Bots subidos", font=("Arial", 14, "bold")).grid(row=0, column=0, sticky="w")
+    listbox = tk.Listbox(left_frame, width=30, height=15)
+    listbox.grid(row=1, column=0, columnspan=3, sticky="nsew")
 
-    tk.Button(frame_left, text="Refrescar", command=lambda: refrescar_bots(listbox_bots)).pack(pady=4)
-    tk.Button(frame_left, text="Pujar/Actualitzar bot", command=lambda: pujar_bot(listbox_bots)).pack(pady=4)
+    refrescar_bots(listbox)
 
-    frame_right = tk.Frame(root)
-    frame_right.pack(side=tk.RIGHT, fill=tk.Y, padx=15, pady=15)
+    tk.Button(left_frame, text="Refrescar", command=lambda: refrescar_bots(listbox)).grid(row=2, column=0, sticky="ew", pady=5, padx=2)
+    tk.Button(left_frame, text="Subir/Actualizar", command=lambda: subir_bot(listbox)).grid(row=2, column=1, sticky="ew", pady=5, padx=2)
+    tk.Button(left_frame, text="Introducir token", command=lambda: pedir_token_api("Global")).grid(row=2, column=2, sticky="ew", pady=5, padx=2)
 
-    tk.Label(frame_right, text="Accions:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(0, 8))
-    tk.Button(frame_right, text="Iniciar bot", width=20, command=lambda: accio_bot(listbox_bots, "start")).pack(pady=3)
-    tk.Button(frame_right, text="Aturar bot", width=20, command=lambda: accio_bot(listbox_bots, "stop")).pack(pady=3)
-    tk.Button(frame_right, text="Info bot", width=20, command=lambda: accio_bot(listbox_bots, "info")).pack(pady=3)
-    tk.Button(frame_right, text="Eliminar bot", width=20, command=lambda: accio_bot(listbox_bots, "delete")).pack(pady=3)
+    root.grid_columnconfigure(0, weight=3)
+    root.grid_rowconfigure(0, weight=1)
+
+    right_frame = tk.Frame(root)
+    right_frame.grid(row=0, column=1, sticky="ns", padx=10, pady=10)
+
+    tk.Label(right_frame, text="Acciones", font=("Arial", 14, "bold")).pack(pady=5)
+    tk.Button(right_frame, text="Iniciar", width=20, command=lambda: accion_bot(listbox, "start")).pack(pady=5)
+    tk.Button(right_frame, text="Detener", width=20, command=lambda: accion_bot(listbox, "stop")).pack(pady=5)
+    tk.Button(right_frame, text="Info", width=20, command=lambda: accion_bot(listbox, "info")).pack(pady=5)
+    tk.Button(right_frame, text="Eliminar", width=20, command=lambda: accion_bot(listbox, "delete")).pack(pady=5)
 
     root.mainloop()
 
-# ------------------------ Flask API doble autenticació i temps d'execució ------------------------
-
-app = Flask(__name__)
-logging.getLogger('werkzeug').setLevel(logging.ERROR)
-
-def require_apikey_jwt(view_func):
-    def wrapper(*args, **kwargs):
-        api_key = request.headers.get("x-api-key")
-        jwt_token = request.headers.get("Authorization")
-        if api_key != API_KEY:
-            abort(401, description="API key incorrecta")
-        try:
-            jwt.decode(jwt_token, JWT_SECRET, algorithms=["HS256"])
-        except Exception:
-            abort(401, description="Token JWT invàlid")
-        return view_func(*args, **kwargs)
-    wrapper.__name__ = view_func.__name__
-    return wrapper
-
-@app.route("/")
-def welcome():
-    return "Servei de bots actiu i protegit"
-
-@app.route("/bots", methods=["GET"])
-@require_apikey_jwt
-def api_listar_bots():
-    start = time.time()
-    bots = listar_bots()
-    ms = int((time.time()-start)*1000)
-    log_accio(f"Llistat bots - {ms}ms")
-    return jsonify(bots=bots, exec_time_ms=ms)
-
-@app.route("/bots/start", methods=["POST"])
-@require_apikey_jwt
-def api_iniciar_bot():
-    start = time.time()
-    data = request.get_json()
-    bot_id = data.get('bot_id')
-    if not bot_id:
-        return jsonify(error="No s'ha especificat bot_id"), 400
-    success, msg = iniciar_bot(bot_id)
-    ms = int((time.time()-start)*1000)
-    log_accio(f"Inici bot '{bot_id}' - {ms}ms")
-    return jsonify(message=msg, exec_time_ms=ms), 200 if success else 400
-
-@app.route("/bots/stop", methods=["POST"])
-@require_apikey_jwt
-def api_aturar_bot():
-    start = time.time()
-    data = request.get_json()
-    bot_id = data.get('bot_id')
-    if not bot_id:
-        return jsonify(error="No s'ha especificat bot_id"), 400
-    success, msg = aturar_bot(bot_id)
-    ms = int((time.time()-start)*1000)
-    log_accio(f"Atura bot '{bot_id}' - {ms}ms")
-    return jsonify(message=msg, exec_time_ms=ms), 200 if success else 400
-
-def run_flask():
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
-
-# ------------------------ Executar API i GUI ------------------------
-
 if __name__ == "__main__":
-    Thread(target=run_flask, daemon=True).start()
     gui()
