@@ -4,17 +4,20 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 import shutil
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, abort
 import logging
 from threading import Thread
+
+# Configuració segura: token de Discord i clau API per protegir l'API
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")  # No exposem mai aquest valor
+API_KEY = os.environ.get("API_KEY")              # Clau privada per accedir a la API
 
 BOTS_DIR = "bots"
 BOTS_PROCESSES = {}
 
-# Crear directori si no existeix
 os.makedirs(BOTS_DIR, exist_ok=True)
 
-# ------------------------- Funcions de gestió de bots -------------------------
+# ------------------------- Funcions per a la gestió local i remota -------------------------
 
 def listar_bots():
     try:
@@ -42,14 +45,15 @@ def pujar_bot(listbox):
 
 def iniciar_bot(bot_id):
     if bot_id in BOTS_PROCESSES:
-        return False, "Bot ja s'està executant"
+        return False, "Bot ja executant-se"
     bot_path = os.path.join(BOTS_DIR, bot_id)
     scripts = [f for f in os.listdir(bot_path) if f.endswith(".py")]
     if not scripts:
-        return False, "No s'ha trobat cap script .py per executar"
+        return False, "Cap script .py trobat"
     script_path = os.path.join(bot_path, scripts[0])
 
     def runner():
+        # Aquí podries usar DISCORD_TOKEN per iniciar el bot si cal dins l'script
         proc = subprocess.Popen(['python', script_path])
         BOTS_PROCESSES[bot_id] = proc
         proc.wait()
@@ -62,7 +66,7 @@ def iniciar_bot(bot_id):
 def aturar_bot(bot_id):
     proc = BOTS_PROCESSES.get(bot_id)
     if not proc:
-        return False, "El bot no està executant-se"
+        return False, "Bot no està actiu"
     proc.terminate()
     try:
         proc.wait(timeout=5)
@@ -83,7 +87,7 @@ def veure_info(bot_id):
     scripts = [f for f in os.listdir(bot_path) if f.endswith(".py")]
     running = "Sí" if bot_id in BOTS_PROCESSES else "No"
     messagebox.showinfo("Info bot",
-                        f"ID bot: {bot_id}\nScripts: {', '.join(scripts) if scripts else '(cap)'}\nEn execució: {running}")
+                        f"ID bot: {bot_id}\nScripts: {', '.join(scripts) if scripts else '(cap)'}\nExecutant: {running}")
 
 def refrescar_bots(listbox):
     listbox.delete(0, tk.END)
@@ -92,7 +96,7 @@ def refrescar_bots(listbox):
 
 def accio_bot(listbox, accio):
     if not listbox.curselection():
-        messagebox.showwarning("Error", "Selecciona un bot primer")
+        messagebox.showwarning("Error", "Selecciona un bot abans")
         return
     bot_id = listbox.get(listbox.curselection()[0])
     if accio == "start":
@@ -112,14 +116,14 @@ def accio_bot(listbox, accio):
     elif accio == "delete":
         eliminar_bot(listbox, bot_id)
 
-# ------------------------ Interfície gràfica Tkinter ------------------------
+# ------------------------ Interfície local Tkinter ------------------------
 
 def gui():
-    main_win = tk.Tk()
-    main_win.title("Free Hosting Bots Discord 24/7 (local)")
-    main_win.geometry("650x400")
+    root = tk.Tk()
+    root.title("Free Hosting Bots Discord 24/7 (local)")
+    root.geometry("650x400")
 
-    frame_left = tk.Frame(main_win)
+    frame_left = tk.Frame(root)
     frame_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=15, pady=15)
 
     tk.Label(frame_left, text="Bots pujats:", font=("Arial", 12, "bold")).pack(anchor="w")
@@ -130,7 +134,7 @@ def gui():
     tk.Button(frame_left, text="Refrescar", command=lambda: refrescar_bots(listbox_bots)).pack(pady=4)
     tk.Button(frame_left, text="Pujar/Actualitzar bot", command=lambda: pujar_bot(listbox_bots)).pack(pady=4)
 
-    frame_right = tk.Frame(main_win)
+    frame_right = tk.Frame(root)
     frame_right.pack(side=tk.RIGHT, fill=tk.Y, padx=15, pady=15)
 
     tk.Label(frame_right, text="Accions:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(0, 8))
@@ -139,35 +143,45 @@ def gui():
     tk.Button(frame_right, text="Info bot", width=20, command=lambda: accio_bot(listbox_bots, "info")).pack(pady=3)
     tk.Button(frame_right, text="Eliminar bot", width=20, command=lambda: accio_bot(listbox_bots, "delete")).pack(pady=3)
 
-    main_win.mainloop()
+    root.mainloop()
 
-# ------------------------ Flask API (Control remot) ------------------------
+# ------------------------ Flask API seguretat amb API KEY ------------------------
 
 app = Flask(__name__)
-logging.getLogger('werkzeug').setLevel(logging.ERROR)  # Ui.logs menys
+logging.getLogger('werkzeug').setLevel(logging.ERROR)
+
+
+def require_apikey(view_func):
+    def wrapper(*args, **kwargs):
+        key = request.headers.get("x-api-key")
+        if key != API_KEY:
+            abort(401, description="API key incorrecte")
+        return view_func(*args, **kwargs)
+    wrapper.__name__ = view_func.__name__
+    return wrapper
 
 @app.route('/')
-def index():
+def welcome():
     return "Servei de bots actiu"
 
 @app.route('/bots', methods=['GET'])
+@require_apikey
 def api_listar_bots():
     bots = listar_bots()
     return jsonify(bots=bots)
 
 @app.route('/bots/start', methods=['POST'])
+@require_apikey
 def api_iniciar_bot():
     data = request.get_json()
     bot_id = data.get('bot_id')
     if not bot_id:
         return jsonify(error="No s'ha especificat bot_id"), 400
-    scripts = [f for f in os.listdir(os.path.join(BOTS_DIR, bot_id)) if f.endswith(".py")]
-    if not scripts:
-        return jsonify(error="Bot no trobat o sense scripts"), 404
     success, msg = iniciar_bot(bot_id)
     return jsonify(message=msg), 200 if success else 400
 
 @app.route('/bots/stop', methods=['POST'])
+@require_apikey
 def api_aturar_bot():
     data = request.get_json()
     bot_id = data.get('bot_id')
@@ -180,7 +194,7 @@ def run_flask():
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
 
-# ------------------------ Entrada principal ------------------------
+# ------------------------ Executar API i GUI ------------------------
 
 if __name__ == "__main__":
     Thread(target=run_flask, daemon=True).start()
