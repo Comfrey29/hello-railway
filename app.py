@@ -7,6 +7,10 @@ app = Flask(__name__)
 @app.route('/')
 def index():
     return "API is running"
+@app.route('/callback')
+def callback():
+    # Implementació de callback
+    ...
 
 @app.route('/validate_token', methods=['POST'])
 def validate_token():
