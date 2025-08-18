@@ -26,9 +26,9 @@ def validate_token():
     else:
         return jsonify({'valid': False, 'error': 'Invalid token'}), 401
 
-@app.route('/health', methods=['GET'])
-def health():
-    # Aquest endpoint indica que el servei està viu i saludable
+@app.route('/healthz', methods=['GET'])
+def healthz():
+    # Endpoint per health check de Render
     return jsonify({'status': 'healthy'}), 200
 
 if __name__ == '__main__':
