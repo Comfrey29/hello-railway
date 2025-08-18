@@ -1,38 +1,37 @@
-import os
+from flask import Flask, request, jsonify
 import requests
-import json
+import os
 
-# Variables d'entorn (cal definir-les al teu .env o al sistema)
-RENDER_API_KEY = os.getenv("RENDER_API_KEY")
-SERVICE_ID = os.getenv("RENDER_SERVICE_ID")  # Exemple: "srv-xxxxxx"
+app = Flask(__name__)
 
-# Validem que estiguin definides
-if not RENDER_API_KEY or not SERVICE_ID:
-    raise ValueError("Falten variables d'entorn: RENDER_API_KEY o RENDER_SERVICE_ID")
+@app.route('/')
+def index():
+    return "API is running"
 
-# Payload de la petició
-payload = {
-    "serviceId": SERVICE_ID,
-    "branch": "main",
-    "rootDirectory": "",
-    "clearCache": True
-}
+@app.route('/callback')
+def callback():
+    # Implementació de callback si es vol
+    return "Callback endpoint"
 
-# Headers amb l'API Key
-headers = {
-    "Authorization": f"Bearer {RENDER_API_KEY}",
-    "Content-Type": "application/json"
-}
-
-# Endpoint de Render per iniciar el deploy
-url = f"https://api.render.com/v1/services/{SERVICE_ID}/deploys"
-
-try:
-    response = requests.post(url, headers=headers, json=payload)
-
-    if response.status_code == 201:
-        print("[RENDER] Deploy OK:", json.dumps(response.json(), indent=2))
+@app.route('/validate_token', methods=['POST'])
+def validate_token():
+    data = request.get_json()
+    token = data.get('token')
+    if not token:
+        return jsonify({'valid': False, 'error': 'No token provided'}), 400
+    headers = {'Authorization': f'Bot {token}'}
+    r = requests.get('https://discord.com/api/v10/users/@me', headers=headers)
+    if r.status_code == 200:
+        return jsonify({'valid': True})
     else:
-        print("[RENDER] Deploy Fallit:", response.status_code, response.text)
-except requests.exceptions.RequestException as e:
-    print("[RENDER] Error de connexió:", str(e))
+        return jsonify({'valid': False, 'error': 'Invalid token'}), 401
+
+@app.route('/healthz', methods=['GET'])
+def healthz():
+    # Endpoint per health check de Render
+    return jsonify({'status': 'healthy'}), 200
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
+
