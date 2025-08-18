@@ -1,0 +1,17 @@
+{
+  "name": "bot-test",
+  "ownerID": "tea-d2f0nsvdiees738cq2e0",
+  "repo": "https://github.com/Comfrey29/hello-railway.git",
+  "branch": "main",
+  "envVars": [
+    {
+      "key": "DISCORD_TOKEN",
+      "value": "exemple_token",
+      "sync": true
+    }
+  ],
+  "buildCommand": "pip install -r requirements.txt",
+  "startCommand": "python bot.py",
+  "serviceType": "background_worker"
+}
+

@@ -1,0 +1,53 @@
+import requests
+import json
+
+RENDER_API_KEY = "la_teva_api_key_render_aquí"
+OWNER_ID = "tea-d2f0nsvdiees738cq2e0"  # El teu ownerId Render
+SERVICE_NAME = "bot-Global"
+REPO_URL = "https://github.com/Comfrey29/hello-railway.git"
+BRANCH = "main"
+DISCORD_TOKEN
+
+def crear_servei_render():
+    url = "https://api.render.com/v1/services"
+    
+    headers = {
+        "Authorization": f"Bearer {RENDER_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "type": "web_service",
+        "name": SERVICE_NAME,
+        "ownerId": OWNER_ID,
+        "serviceDetails": {
+            "repo": REPO_URL,
+            "branch": BRANCH,
+            "runtime": "python3",  # important que sigui python3
+            "envVars": [
+                {
+                    "key": "DISCORD_TOKEN",
+                    "value": DISCORD_TOKEN,
+                    "sync": True
+                }
+            ],
+            "buildCommand": "pip install -r requirements.txt",
+            "startCommand": "python bot.py",
+            "plan": "starter"
+        }
+    }
+    
+    print("Enviant dades a Render (JSON):")
+    print(json.dumps(data, indent=2))
+    
+    response = requests.post(url, headers=headers, json=data)
+    
+    if response.status_code == 201:
+        print("Servei creat correctament!")
+        print(response.json())
+    else:
+        print(f"Error fent la crida a Render POST: {response.status_code} {response.reason}")
+        print("Resposta:", response.text)
+
+# Cridem la funció per provar
+crear_servei_render()

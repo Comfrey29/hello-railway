@@ -1,0 +1,3 @@
+[console_scripts]
+renderctl = renderctl.main:main
+

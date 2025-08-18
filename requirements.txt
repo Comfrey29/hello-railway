@@ -1,0 +1,9 @@
+discord.py
+requests
+flask
+<<<<<<< HEAD
+gunicorn
+requests
+=======
+python-dotenv
+>>>>>>> 4c40460 (test)

@@ -1,0 +1,9 @@
+# .gitignore
+*.env
+tokens.json
+uploads/*.py
+bots/Global/token.txt
+bfg-*.jar
+railway-backup.git/
+railway-backup.git.bfg-report/
+hello-railway-clean/
